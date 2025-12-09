@@ -9,22 +9,30 @@ import {
   KeyboardAvoidingView,
   Platform,
   Alert,
+  Image,
+  ActivityIndicator,
 } from 'react-native';
+import { launchImageLibrary } from 'react-native-image-picker';
 import { getUsername, removeUsername } from '../utils/storage';
-import { sendMessage, subscribeToMessages } from '../services/firebaseService';
+import {
+  sendMessage,
+  sendImageMessage,
+  subscribeToMessages,
+  uploadImage,
+} from '../services/firebaseService';
 import { CommonActions } from '@react-navigation/native';
 
 const ChatRoomScreen = ({ navigation }) => {
   const [currentUsername, setCurrentUsername] = useState('');
   const [messages, setMessages] = useState([]);
   const [inputText, setInputText] = useState('');
+  const [uploading, setUploading] = useState(false);
   const flatListRef = useRef(null);
 
   useEffect(() => {
     loadUsername();
     const unsubscribe = subscribeToMessages(newMessages => {
       setMessages(newMessages);
-      // Auto scroll ke bawah saat ada pesan baru
       setTimeout(() => {
         flatListRef.current?.scrollToEnd({ animated: true });
       }, 100);
@@ -51,6 +59,44 @@ const ChatRoomScreen = ({ navigation }) => {
     } else {
       Alert.alert('Error', 'Gagal mengirim pesan');
     }
+  };
+
+  const handleImagePick = () => {
+    const options = {
+      mediaType: 'photo',
+      quality: 0.8,
+      maxWidth: 1024,
+      maxHeight: 1024,
+    };
+
+    launchImageLibrary(options, async response => {
+      if (response.didCancel) {
+        return;
+      }
+
+      if (response.errorCode) {
+        Alert.alert('Error', 'Gagal memilih gambar');
+        return;
+      }
+
+      if (response.assets && response.assets[0]) {
+        const imageUri = response.assets[0].uri;
+        setUploading(true);
+
+        const imageUrl = await uploadImage(imageUri, currentUsername);
+
+        if (imageUrl) {
+          const success = await sendImageMessage(currentUsername, imageUrl);
+          if (!success) {
+            Alert.alert('Error', 'Gagal mengirim gambar');
+          }
+        } else {
+          Alert.alert('Error', 'Gagal upload gambar');
+        }
+
+        setUploading(false);
+      }
+    });
   };
 
   const handleLogout = () => {
@@ -83,8 +129,22 @@ const ChatRoomScreen = ({ navigation }) => {
         ]}
       >
         {!isOwnMessage && <Text style={styles.username}>{item.username}</Text>}
-        <Text style={styles.messageText}>{item.text}</Text>
-        <Text style={styles.timestamp}>
+
+        {item.type === 'image' ? (
+          <Image
+            source={{ uri: item.imageUrl }}
+            style={styles.messageImage}
+            resizeMode="cover"
+          />
+        ) : (
+          <Text
+            style={[styles.messageText, isOwnMessage && styles.ownMessageText]}
+          >
+            {item.text}
+          </Text>
+        )}
+
+        <Text style={[styles.timestamp, isOwnMessage && styles.ownTimestamp]}>
           {item.createdAt.toLocaleTimeString('id-ID', {
             hour: '2-digit',
             minute: '2-digit',
@@ -123,8 +183,24 @@ const ChatRoomScreen = ({ navigation }) => {
         }
       />
 
+      {/* Uploading Indicator */}
+      {uploading && (
+        <View style={styles.uploadingContainer}>
+          <ActivityIndicator size="small" color="#4A90E2" />
+          <Text style={styles.uploadingText}>Mengirim gambar...</Text>
+        </View>
+      )}
+
       {/* Input Area */}
       <View style={styles.inputContainer}>
+        <TouchableOpacity
+          style={styles.imageButton}
+          onPress={handleImagePick}
+          disabled={uploading}
+        >
+          <Text style={styles.imageButtonText}>📷</Text>
+        </TouchableOpacity>
+
         <TextInput
           style={styles.input}
           placeholder="Ketik pesan..."
@@ -133,7 +209,12 @@ const ChatRoomScreen = ({ navigation }) => {
           multiline
           maxLength={500}
         />
-        <TouchableOpacity style={styles.sendButton} onPress={handleSend}>
+
+        <TouchableOpacity
+          style={styles.sendButton}
+          onPress={handleSend}
+          disabled={uploading}
+        >
           <Text style={styles.sendButtonText}>Kirim</Text>
         </TouchableOpacity>
       </View>
@@ -206,11 +287,35 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: '#333',
   },
+  ownMessageText: {
+    color: 'white',
+  },
+  messageImage: {
+    width: 200,
+    height: 200,
+    borderRadius: 10,
+    marginVertical: 5,
+  },
   timestamp: {
     fontSize: 10,
     color: '#999',
     marginTop: 4,
     alignSelf: 'flex-end',
+  },
+  ownTimestamp: {
+    color: 'rgba(255,255,255,0.8)',
+  },
+  uploadingContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 10,
+    backgroundColor: '#e3f2fd',
+  },
+  uploadingText: {
+    marginLeft: 10,
+    color: '#4A90E2',
+    fontSize: 14,
   },
   inputContainer: {
     flexDirection: 'row',
@@ -218,6 +323,19 @@ const styles = StyleSheet.create({
     backgroundColor: 'white',
     borderTopWidth: 1,
     borderTopColor: '#e0e0e0',
+    alignItems: 'center',
+  },
+  imageButton: {
+    width: 40,
+    height: 40,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#f5f5f5',
+    borderRadius: 20,
+    marginRight: 10,
+  },
+  imageButtonText: {
+    fontSize: 20,
   },
   input: {
     flex: 1,
@@ -233,6 +351,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#4A90E2',
     borderRadius: 20,
     paddingHorizontal: 20,
+    paddingVertical: 10,
     justifyContent: 'center',
     alignItems: 'center',
   },
